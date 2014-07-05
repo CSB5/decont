@@ -38,7 +38,7 @@ logging.basicConfig(level=logging.INFO,
                     format='%(levelname)s [%(asctime)s]: %(message)s')
 
 """
-FIXME give flags a name 
+FIXME give flags a name
 
 from samtools' 0.1.19 bam.h:
 
@@ -69,6 +69,7 @@ from samtools' 0.1.19 bam.h:
 
 def read_base_name(r):
     """return base name for read, i.e. without pairing information"""
+
     if r[-1] in "0123456789" and r[-2] in "#/":
         return r[:-2]
     else:
@@ -79,6 +80,7 @@ def complement(strand):
     """return DNA complement
     from http://stackoverflow.com/questions/1738633/more-pythonic-way-to-find-a-complementary-dna-strand
     """
+
     return strand.translate(maketrans('TAGCtagc', 'ATCGATCG'))
 
 
@@ -122,48 +124,47 @@ def sam_to_fastq(sam_line, fastq_fh, check_uniq_occurance=10000):
     fastq_fh.write('@%s\n%s\n+\n%s\n' % (name, seq, qual))
 
 
-def main(fastq_in, ref, fastq_fh, bam_out, num_threads=2):
+def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2):
     """main function
 
     fastq_in and fastq_fh should be lists (single or paired-end)
     """
 
-    # bufsize needs testing & optimization
+    # FIXME bufsize needs testing & optimization
     bufsize = 4096
 
     assert len(fastq_in) == len(fastq_fh)
     for f in fastq_in + [ref]:
         assert os.path.exists(f)
 
-    if len(fastq_in) == 2:
-        last_mate_name = None
-
-    bwa_mem_cmd = ['bwa', 'mem', '-t', "%d" % num_threads, ref]
-    bwa_mem_cmd.extend(fastq_in)
-
     # can't use pysam with subprocess
-    #p = subprocess.Popen(bwa_mem_cmd, stdout=subprocess.PIPE)
+    #p = subprocess.Popen(bwamem_cmd, stdout=subprocess.PIPE)
     #s = pysam.Samfile(p.stdout, "rb")
     # throws 'TypeError: Argument must be string or unicode'
     # see also https://www.biostars.org/p/15298/#105456
     # could use stringio?
-
     cmd = ["samtools", "view", "-bS", "-"]
     samtools_p = subprocess.Popen(cmd,
-        stdin=subprocess.PIPE, stdout=open(bam_out, 'wb'), bufsize=bufsize)
+        stdin=subprocess.PIPE, stdout=bam_fh, bufsize=bufsize)
 
     # could redirect stderr to file and cat on problem but leave it to
     # user
-    bwa_p = subprocess.Popen(bwa_mem_cmd,
-                             stdout=subprocess.PIPE, bufsize=bufsize)
-    counts = defaultdict(int)
+    cmd = ['bwa', 'mem', '-t', "%d" % num_threads, ref]
+    cmd.extend(fastq_in)
+    bwa_p = subprocess.Popen(cmd,
+        stdout=subprocess.PIPE, bufsize=bufsize)
+
+    if len(fastq_in) == 2:
+        last_mate_name = None# for mate pair consitency check
+    counts = defaultdict(int)# for reporting
+
     for line in bwa_p.stdout:
     #for (line_no, line) in enumerate(bwa_p.stdout):
         #if line_no>1000:
         #    LOG.critical("DEBUG break")
         #    break
 
-        # catch sam header
+        # catch SAM header
         if line.startswith('@'):
             samtools_p.stdin.write(line)
             continue
@@ -221,13 +222,13 @@ def main(fastq_in, ref, fastq_fh, bam_out, num_threads=2):
 
             both_unmapped = (flag & 0x4) and (flag & 0x8)
             if not both_unmapped:
-                counts['written to %s' % bam_out]  += 1
+                counts['written to %s' % bam_fh.name] += 1
                 samtools_p.stdin.write(line)
             else:
-                if flag & 0x40:
+                if flag & 0x40:# 1st in pair
                     counts['written to %s' % fastq_fh[0].name] += 1
                     sam_to_fastq(line, fastq_fh[0])
-                elif flag & 0x80:
+                elif flag & 0x80:# 2nd in pair
                     counts['written to %s' % fastq_fh[1].name] += 1
                     sam_to_fastq(line, fastq_fh[1])
                 else:
@@ -238,26 +239,25 @@ def main(fastq_in, ref, fastq_fh, bam_out, num_threads=2):
                 counts['written to %s' % fastq_fh[0].name] += 1
                 sam_to_fastq(line, fastq_fh[0])
             else:
-                counts['written to %s' % bam_out] += 1
+                counts['written to %s' % bam_fh.name] += 1
                 samtools_p.stdin.write(line)
 
     samtools_p.stdin.close()
     if samtools_p.wait() != 0:
-        LOG.critical("unhandled samtools error (can happen"
-                     " with no contamination, i.e. when SAM is empty)."
-                     " You better tally numbers manually")
-        
+        LOG.critical("Unhandled samtools error. Note, this can happen"
+                     " when BAM is empty i.e. with no contamination."
+                     " samtools might then issue the following complaint:"
+                     " \"reference 'XYZ' is recognized as '*'\""
+                     " followed by \"truncated file\"")
+
     for (k, v) in counts.items():
         LOG.info("Reads %s: %d" % (k, v))
-        
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # FIXME allow for bwa-mem special args
-    # FIXME allow for reuse of existing bam (needs to be sorted by name!)
-    #parser.add_argument("-b", "--bam",
-    #                    dest='bam',
-    #                    help="Already existing BAM file mapped against source of contamination")
+    # FIXME support bwa-mem special args
+    # FIXME allow reuse of existing bam (needs to be sorted by name!)
     mandatory = parser.add_argument_group('mandatory arguments')
     mandatory.add_argument("-i", "--fq",
                         dest='fastq_in',
@@ -300,14 +300,16 @@ if __name__ == "__main__":
 
     fastq_fh = [gzip.open(f, 'w') for f in fastq_out]
 
+    bam_fh = open(bam_out, 'wb')
+
     if not os.path.exists(args.ref + ".bwt"):
         LOG.warn("Doesn't look like reference was indexed."
                  " Did you forget to run bwa index %s ?" % args.ref)
 
-    main(args.fastq_in, args.ref, fastq_fh, bam_out,
+    main(args.fastq_in, args.ref, fastq_fh, bam_fh,
          args.num_threads)
 
-    for f in fastq_fh:
+    for f in fastq_fh + [bam_fh]:
         f.close()
 
     LOG.info("Successful program exit")
