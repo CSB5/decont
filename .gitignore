@@ -5,3 +5,4 @@ testing/denv1_refseq.fa.ann
 testing/denv1_refseq.fa.bwt
 testing/denv1_refseq.fa.pac
 testing/denv1_refseq.fa.sa
+testing/_test*
