@@ -1,0 +1,6 @@
+Data is from archive SRR1056478.
+
+Ran decont.py once and took first 1000 from
+SRR1056478_decont.bam.fastq (removed one read behaving differently in
+SR mode) to generate clean reads. Converted BAM to FastQ and took
+first 1000 for contaminated reads.
