@@ -10,6 +10,7 @@ pushd $(dirname $0)>/dev/null
 
 echo "INFO: testing $DECONT"
 echo "INFO: log file is $LOG and output prefix is always $OUTPREF. If things go wrong, check those files"
+echo "INFO: last line should be 'All tests passed successfully'"
 
 # index if needed
 test -e ${REF}.bwt || bwa index $REF
@@ -35,7 +36,7 @@ if [ $n_bam -ne $n_in ] || [ $n_fq -ne 0 ]; then
     echo "ERROR: expected all reads in BAM; none in fastq" 1>&2;
     exit 1;
 fi
-echo "OK: $test"
+echo "$test: OK"
 find . -name ${OUTPREF}\* -exec rm {} \;
 
 
@@ -56,7 +57,7 @@ if [ $n_bam -ne $n_in ] || [ $n_fq -ne 0 ]; then
     echo "ERROR: expected all reads in BAM; none in fastq" 1>&2;
     exit 1;
 fi
-echo "OK: $test"
+echo "$test: OK"
 find . -name ${OUTPREF}\* -exec rm {} \;
 
 
@@ -83,7 +84,7 @@ if [ $md5_in != $md5_out ]; then
     echo "ERROR: reads in input and output FastQ differ" 1>&2;
     exit 1;
 fi
-echo "OK: $test"
+echo "$test: OK"
 find . -name ${OUTPREF}\* -exec rm {} \;
 
 
@@ -110,11 +111,11 @@ if [ $md5_in != $md5_out ]; then
     echo "ERROR: reads in input and output FastQ differ" 1>&2;
     exit 1;
 fi
-echo "OK: $test"
+echo "$test: OK"
 find . -name ${OUTPREF}\* -exec rm {} \;
 
 
 echo "NOTE: missing test for pairs where one maps the other one doesn't" 1>&2
 
-echo "OK: all passed"
+echo "All tests passed successfully"
 popd >/dev/null
