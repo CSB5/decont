@@ -124,7 +124,7 @@ def sam_to_fastq(sam_line, fastq_fh, check_uniq_occurance=10000):
     fastq_fh.write('@%s\n%s\n+\n%s\n' % (name, seq, qual))
 
 
-def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2):
+def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa'):
     """main function
 
     fastq_in and fastq_fh should be lists (single or paired-end)
@@ -137,6 +137,8 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2):
     for f in fastq_in + [ref]:
         assert os.path.exists(f)
 
+    # FIXME check support for bwa mem
+    
     # can't use pysam with subprocess
     #p = subprocess.Popen(bwamem_cmd, stdout=subprocess.PIPE)
     #s = pysam.Samfile(p.stdout, "rb")
@@ -149,7 +151,7 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2):
 
     # could redirect stderr to file and cat on problem but leave it to
     # user
-    cmd = ['bwa', 'mem', '-t', "%d" % num_threads, ref]
+    cmd = [bwa, 'mem', '-t', "%d" % num_threads, ref]
     cmd.extend(fastq_in)
     bwa_p = subprocess.Popen(cmd,
         stdout=subprocess.PIPE, bufsize=bufsize)
@@ -273,12 +275,16 @@ if __name__ == "__main__":
                         dest='ref',
                         help="Reference fasta file of source of contamination"
                         " (needs to be bwa indexed already)")
+    
     default = 4
-    mandatory.add_argument("-t", "--threads",
+    parser.add_argument("-t", "--threads",
                         dest='num_threads',
                         default=default,
                         help="Number of threads to use for mapping"
                         " (default = %d)" % default)
+    parser.add_argument("-b", "--bwa",
+                        dest='bwa',
+                        help="Path to BWA supporting the mem command (will use BWA found in PATH if not set)")
     args = parser.parse_args()
 
     fastq_out = ["%s_%d.fastq.gz" % (args.outpref, i+1)
@@ -307,7 +313,7 @@ if __name__ == "__main__":
                  " Did you forget to run bwa index %s ?" % args.ref)
 
     main(args.fastq_in, args.ref, fastq_fh, bam_fh,
-         args.num_threads)
+         num_threads=args.num_threads, bwa=args.bwa)
 
     for f in fastq_fh + [bam_fh]:
         f.close()
