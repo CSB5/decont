@@ -8,7 +8,12 @@ md5=$(which md5sum 2>/dev/null || which md5)
 pushd $(dirname $0)>/dev/null
 
 
-echo "INFO: testing $DECONT"
+BWA=bwa
+if [ ! -z "$1" ]; then
+    BWA=$1
+fi
+
+echo "INFO: testing $DECONT with $BWA"
 echo "INFO: log file is $LOG and output prefix is always $OUTPREF. If things go wrong, check those files"
 echo "INFO: last line should be 'All tests passed successfully'"
 
@@ -21,7 +26,7 @@ find . -name ${OUTPREF}\* -exec rm {} \;
 
 test="All contaminated (SR)"
 in="SRR1056478_denv1_match_1.fastq.gz"
-cmd="$DECONT -i $in -o ${OUTPREF} -r $REF"
+cmd="$DECONT -b $BWA -i $in -o ${OUTPREF} -r $REF"
 if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
 n_in=$(fastq_num_reads.sh $in | awk '{s+=$NF} END {print s}')
 n_bam=$(samtools view -c ${OUTPREF}.bam)
@@ -42,7 +47,7 @@ find . -name ${OUTPREF}\* -exec rm {} \;
 
 test="All contaminated (PE)"
 in="SRR1056478_denv1_match_1.fastq.gz SRR1056478_denv1_match_2.fastq.gz"
-cmd="$DECONT -i $in -o ${OUTPREF} -r $REF"
+cmd="$DECONT -b $BWA -i $in -o ${OUTPREF} -r $REF"
 if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
 n_in=$(fastq_num_reads.sh $in | awk '{s+=$NF} END {print s}')
 n_bam=$(samtools view -c ${OUTPREF}.bam)
@@ -63,7 +68,7 @@ find . -name ${OUTPREF}\* -exec rm {} \;
 
 test="All clean (SR)"
 in="SRR1056478_denv1_nomatch_1.fastq.gz"
-cmd="$DECONT -i $in -o ${OUTPREF} -r $REF"
+cmd="$DECONT -b $BWA -i $in -o ${OUTPREF} -r $REF"
 if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
 n_in=$(fastq_num_reads.sh $in | awk '{s+=$NF} END {print s}')
 n_bam=$(samtools view -c ${OUTPREF}.bam)
@@ -78,8 +83,8 @@ if [ $n_fq -ne $n_in ] || [ $n_bam -ne 0 ]; then
     echo "ERROR: expected all reads in FastQ; none in BAM" 1>&2;
     exit 1;
 fi
-md5_in=$(zcat $in | $md5)
-md5_out=$(zcat ${OUTPREF}_*.fastq.gz | $md5)
+md5_in=$(zcat $in | $md5 | cut -f1 -d ' ' )
+md5_out=$(zcat ${OUTPREF}_*.fastq.gz | $md5 | cut -f1 -d ' ')
 if [ $md5_in != $md5_out ]; then
     echo "ERROR: reads in input and output FastQ differ" 1>&2;
     exit 1;
@@ -90,7 +95,7 @@ find . -name ${OUTPREF}\* -exec rm {} \;
 
 test="All clean (PE)"
 in="SRR1056478_denv1_nomatch_1.fastq.gz SRR1056478_denv1_nomatch_2.fastq.gz"
-cmd="$DECONT -i $in -o ${OUTPREF} -r $REF"
+cmd="$DECONT -b $BWA -i $in -o ${OUTPREF} -r $REF"
 if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
 n_in=$(fastq_num_reads.sh $in | awk '{s+=$NF} END {print s}')
 n_bam=$(samtools view -c ${OUTPREF}.bam)
@@ -105,8 +110,8 @@ if [ $n_fq -ne $n_in ] || [ $n_bam -ne 0 ]; then
     echo "ERROR: expected all reads in FastQ; none in BAM" 1>&2;
     exit 1;
 fi
-md5_in=$(zcat $in | $md5)
-md5_out=$(zcat ${OUTPREF}_*.fastq.gz | $md5)
+md5_in=$(zcat $in | $md5 | cut -f1 -d ' ')
+md5_out=$(zcat ${OUTPREF}_*.fastq.gz | $md5 | cut -f1 -d ' ')
 if [ $md5_in != $md5_out ]; then
     echo "ERROR: reads in input and output FastQ differ" 1>&2;
     exit 1;
