@@ -85,7 +85,7 @@ def complement(strand):
     return strand.translate(maketrans('TAGCtagc', 'ATCGATCG'))
 
 
-def sam_to_fastq(sam_line, fastq_fh, check_uniq_occurance=10000):
+def sam_to_fastq(sam_line, fastq_fh, check_uniq_occurance=100):
     """convert sam line to fastq entry
 
     Will make an attempt to check that no reads with identical names
