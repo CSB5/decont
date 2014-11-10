@@ -276,10 +276,11 @@ if __name__ == "__main__":
                         help="Reference fasta file of source of contamination"
                         " (needs to be bwa indexed already)")
     
-    default = 4
+    default = 8
     parser.add_argument("-t", "--threads",
                         dest='num_threads',
                         default=default,
+                        type=int,
                         help="Number of threads to use for mapping"
                         " (default = %d)" % default)
     parser.add_argument("-b", "--bwa",
