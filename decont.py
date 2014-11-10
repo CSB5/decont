@@ -8,6 +8,7 @@ with uncontaminated reads.
 Needs samtools and BWA(-MEM) installed.
 """
 
+
 __author__ = "Andreas Wilm"
 __email__ = "wilma@gis.a-star.edu.sg"
 __copyright__ = "2014 Genome Institute of Singapore"
@@ -78,20 +79,20 @@ def read_base_name(r):
 
 def complement(strand):
     """return DNA complement
+    
     from http://stackoverflow.com/questions/1738633/more-pythonic-way-to-find-a-complementary-dna-strand
     """
-
     return strand.translate(maketrans('TAGCtagc', 'ATCGATCG'))
 
 
 def sam_to_fastq(sam_line, fastq_fh, check_uniq_occurance=10000):
-    """convert sam line to fastq entry.
+    """convert sam line to fastq entry
 
     Will make an attempt to check that no reads with identical names
     were processed (keeping check_uniq_occurance entries). The larger
     the number the more things will slow down. This makes it in fact
-    the most time consuming effect, which should be unnecessary as
-    long as we pass 0x900==0 reads in here.
+    the most time consuming step, even though it's in theory unnecessary
+    as long as we pass 0x900==0 reads in here.
     """
 
     # local static fake
