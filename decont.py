@@ -294,6 +294,7 @@ if __name__ == "__main__":
                         " (default = %d)" % default)
     parser.add_argument("-b", "--bwa",
                         dest='bwa',
+                        default="bwa",
                         help="Path to BWA binary (will use BWA found in PATH if not set)")
     args = parser.parse_args()
 
