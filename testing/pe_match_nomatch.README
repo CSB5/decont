@@ -1,0 +1,3 @@
+ gzip -dc SRR1056478_denv1_nomatch_1.fastq.gz | head -n4  | sed -e 's,@SRR1056478.189/1,@SRR1056478.1/2,' | gzip > pe_nomatch.fastq.gz
+ gzip -dc SRR1056478_denv1_match_1.fastq.gz | head -n4 | gzip > pe_match.fastq.gz 
+

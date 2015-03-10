@@ -22,10 +22,17 @@ import logging
 import os
 import argparse
 import subprocess
-from collections import deque
+#from collections import deque
 from collections import defaultdict
 from string import maketrans
 import gzip
+from itertools import groupby
+from collections import namedtuple
+
+
+SamRead = namedtuple('SamRead',
+                     ['qname', 'flag', 'rname', 'pos', 'mapq', 'cigar',
+                      'rnext', 'pnext', 'tlen', 'seq', 'qual', 'rest'])
 
 #--- third-party imports
 #
@@ -68,24 +75,53 @@ from samtools' 0.1.19 bam.h:
 """
 
 
-def read_base_name(r):
-    """return base name for read, i.e. without pairing information"""
+def sam_to_read(line, add_index=True):
+    """converts same line to namedtuple read
+    """
 
-    if r[-1] in "0123456789" and r[-2] in "#/":
-        return r[:-2]
-    else:
-        return r
+    ls = line.rstrip().split('\t')
+    l = ls[:11]
+    l.append('\t'.join(ls[11:]))
+    r = SamRead._make(l)
+    r = r._replace(flag=int(r.flag))
+    r = r._replace(pos=int(r.pos))
+    r = r._replace(mapq=int(r.mapq))
+    r = r._replace(pnext=int(r.pnext))
+    r = r._replace(tlen=int(r.tlen))
+
+    if add_index and r.rname == read_base_name(r.rname):# swallowed by bwa
+        # From SAM spec: "If 0x1 is unset, no assumptions can be made
+        # about 0x2, 0x8, 0x20, 0x40 and 0x80.". So check for pair before
+        # checking read number.
+        index = 1
+        if (r.flag & 0x1) and (r.flag & 0x80):
+            index += 1
+        r = r._replace(qname="%s/%d" % (r.qname, index))
+
+    return r
+
+
+def read_to_sam(read):
+    """convert namedtuple read to sam line"""
+    values = read._asdict().values()
+    sam = '\t'.join([str(v) for v in values[:11]])
+    if read.rest:
+        sam = "%s\t%s" % (sam, read.rest)
+    return sam + "\n"
 
 
 def complement(strand):
     """return DNA complement
-    
+
     from http://stackoverflow.com/questions/1738633/more-pythonic-way-to-find-a-complementary-dna-strand
+
+    >>> complement('AcGtN')
+    'TGCAN'
     """
     return strand.translate(maketrans('TAGCtagc', 'ATCGATCG'))
 
 
-def sam_to_fastq(sam_line, fastq_fh, check_uniq_occurance=100):
+def read_to_fastq(read, fastq_fh):
     """convert sam line to fastq entry
 
     Will make an attempt to check that no reads with identical names
@@ -97,32 +133,40 @@ def sam_to_fastq(sam_line, fastq_fh, check_uniq_occurance=100):
 
     # local static fake
     # http://stackoverflow.com/questions/279561/what-is-the-python-equivalent-of-static-variables-inside-a-function
-    if 'seen' not in sam_to_fastq.__dict__:
-        sam_to_fastq.seen = deque(maxlen=check_uniq_occurance)
+    #if 'seen' not in sam_to_fastq.__dict__:
+    #    sam_to_fastq.seen = deque(maxlen=check_uniq_occurance)
 
-    line_split = sam_line.split('\t')
-    (name, flag) = (line_split[0:2])
-    name = read_base_name(name)# necessary?
-    flag = int(flag)
-    (seq, qual) = line_split[9:11]
+    if read.flag & 0x10:
+        read = read._replace(seq=reversed(complement(read.seq)))
+        read = read._replace(qual=reversed(read.qual))
 
-    if flag & 0x10:
-        seq = reversed(complement(seq))
-        qual = reversed(qual)
+    #if check_uniq_occurance:
+    #    assert name not in sam_to_fastq.seen
+    #    sam_to_fastq.seen.append(name)
 
-    # From SAM spec: "If 0x1 is unset, no assumptions can be made
-    # about 0x2, 0x8, 0x20, 0x40 and 0x80.". So check for pair before
-    # checking read number.
-    index = 1
-    if (flag & 0x1) and (flag & 0x80):
-        index += 1
-    name = "%s/%d" % (name, index)
+    fastq_fh.write('@%s\n%s\n+\n%s\n' % (read.qname, read.seq, read.qual))
 
-    if check_uniq_occurance:
-        assert name not in sam_to_fastq.seen
-        sam_to_fastq.seen.append(name)
 
-    fastq_fh.write('@%s\n%s\n+\n%s\n' % (name, seq, qual))
+def read_base_name(rname):
+    """return base name for read, i.e. without pairing information
+
+    >>> r = "M01853:160:000000000-ADF3H:1:1101:15677:1332/1"
+    >>> read_base_name(r)
+    'M01853:160:000000000-ADF3H:1:1101:15677:1332'
+
+    >>> r = "M01853:160:000000000-ADF3H:1:1101:15677:1332#2"
+    >>> read_base_name(r)
+    'M01853:160:000000000-ADF3H:1:1101:15677:1332'
+
+    >>> r = "M01853:160:000000000-ADF3H:1:1101:15677:1332"
+    >>> read_base_name(r)
+    'M01853:160:000000000-ADF3H:1:1101:15677:1332'
+    """
+
+    if rname[-1] in "0123456789" and rname[-2] in "#/":
+        return rname[:-2]
+    else:
+        return rname
 
 
 def bwa_mem_support(bwa='bwa'):
@@ -134,13 +178,95 @@ def bwa_mem_support(bwa='bwa'):
             return True
     return False
 
-     
-def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa'):
+
+def cigar_items(cigar_str):
+    """Taken from Brent Pedersen's https://github.com/brentp/cigar/blob/master/cigar.py
+    """
+    if cigar_str == "*":
+        yield (0, None)
+        raise StopIteration
+    cig_iter = groupby(cigar_str, lambda c: c.isdigit())
+    for _, n in cig_iter:
+        yield int("".join(n)), "".join(next(cig_iter)[1])
+
+
+def read_coverage(cigar_str, read_len):
+    """return read coverage as fraction of read length only terminal clips
+    and indels are not considered covering
+
+    >>> c="100M"
+    >>> read_coverage(c, 100)
+    1.0
+
+    >>> c="50S50M"
+    >>> read_coverage(c, 100)
+    0.5
+
+    >>> c="50M50S"
+    >>> read_coverage(c, 100)
+    0.5
+
+    >>> c="10S80M10I"
+    >>> read_coverage(c, 100)
+    0.8
+
+    >>> c="10I80M10S"
+    >>> read_coverage(c, 100)
+    0.8
+
+    >>> c="5S5I8M80I8M5I5S"
+    >>> read_coverage(c, 100)
+    0.8
+
+    >>> read_coverage("*", 100)
+    0.0
+    """
+
+    cigar = list(cigar_items(cigar_str))
+    if len(cigar) == 1 and cigar[0][1] == None:
+        return 0.0
+
+    covered = read_len
+    for (clen, cop) in cigar:
+        if cop in "SID":
+            covered -= clen
+        else:
+            break
+    for (clen, cop) in reversed(cigar):
+        if cop in "SID":
+            covered -= clen
+        else:
+            break
+    assert covered >= 0
+    return covered/float(read_len)
+
+
+def min_cov_met(cstr, rlen, mincov):
+    """Check whether alignment meets minimum coverage
+
+    >>> min_cov_met("10M", 10, 1.0)
+    True
+    >>> min_cov_met("5S5M", 10, 1.0)
+    False
+    >>> min_cov_met("5S5M", 10, 0.5)
+    True
+    """
+
+    if mincov:
+        assert mincov>=0.0 and mincov<=1.0
+    if not mincov or mincov <= 0.0:
+        return True
+    if read_coverage(cstr, rlen) < mincov:
+        return False
+    else:
+        return True
+
+
+def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
     """main function
 
     fastq_in and fastq_fh should be lists (single or paired-end)
     """
-
     # FIXME bufsize needs testing & optimization
     bufsize = 2**16
 
@@ -148,9 +274,10 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa'):
     for f in fastq_in + [ref]:
         assert os.path.exists(f)
 
+    # open BAM as pipe
     # can't use pysam with subprocess
-    #p = subprocess.Popen(bwamem_cmd, stdout=subprocess.PIPE)
-    #s = pysam.Samfile(p.stdout, "rb")
+    # p = subprocess.Popen(bwamem_cmd, stdout=subprocess.PIPE)
+    # s = pysam.Samfile(p.stdout, "rb")
     # throws 'TypeError: Argument must be string or unicode'
     # see also https://www.biostars.org/p/15298/#105456
     # could use stringio?
@@ -158,22 +285,22 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa'):
     samtools_p = subprocess.Popen(cmd,
         stdin=subprocess.PIPE, stdout=bam_fh, bufsize=bufsize)
 
+    # open BWA as pipe
+    #
     # could redirect stderr to file and cat on problem but leave it to
-    # user
+    # user.
     #
     # FIXME add '-M' Mark shorter split hits as secondary. Not for
     # Picard but to make downstream filtering easier (just 0x200
     # instead of 0x200 and 0x800)
-    # 
+    #
     cmd = [bwa, 'mem', '-t', "%d" % num_threads, ref]
     cmd.extend(fastq_in)
     bwa_p = subprocess.Popen(cmd,
         stdout=subprocess.PIPE, bufsize=bufsize)
 
-    if len(fastq_in) == 2:
-        last_mate_name = None# for mate pair consitency check
+    prev_read = None
     counts = defaultdict(int)# for reporting
-
     for line in bwa_p.stdout:
     #for (line_no, line) in enumerate(bwa_p.stdout):
         #if line_no>1000:
@@ -185,13 +312,10 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa'):
             samtools_p.stdin.write(line)
             continue
 
-        counts['received from BWA'] += 1
-        (name, flag) = line.split('\t')[:2]
-        flag = int(flag)
-        name = read_base_name(name)# necessary?
+        counts['Total received from BWA'] += 1
+        cur_read = sam_to_read(line)
 
-        # from the SAM spec:
-        # http://samtools.github.io/hts-specs/SAMv1.pdf:
+        # from the SAM spec http://samtools.github.io/hts-specs/SAMv1.pdf:
         #
         # - Bit 0x4 is the only reliable place to tell whether the
         # read is unmapped. If 0x4 is set, no assumptions can be made
@@ -214,55 +338,80 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa'):
         # is part of a chimeric alignment. A line flagged with 0x800 is
         # called as a supplementary line
 
-        if flag & 0x900:
-            LOG.debug("Skipping secondary or"
-                      " supplementary alignment: %s" % line)
+        if cur_read.flag & 0x900:
+            counts['Skipped secondary alignments'] += 1
             continue
 
-        is_paired = flag & 0x1
+        is_paired = cur_read.flag & 0x1
         if len(args.fastq_in) == 2:
-            assert is_paired, (
-                "Got two fastq files (paired end) but bwa mem output"
-                 " reported single end mapping")
+            assert is_paired, ("Got two fastq files (paired end) but bwa-mem"
+                               " output reported single end mapping")
         else:
-            assert not is_paired, (
-                "Got one fastq files (single end) but bwa mem output"
-                 " reported paired end mapping")
+            assert not is_paired, ("Got one fastq file (single end) but bwa-mem"
+                                   " output reported paired end mapping")
+
+        if is_paired and not prev_read:
+            # just store for now, no writing
+            prev_read = cur_read
+            continue
 
         if is_paired:
-            if last_mate_name:
-                assert name == last_mate_name
-                last_mate_name = None
-            else:
-                last_mate_name = name
-
-            both_unmapped = (flag & 0x4) and (flag & 0x8)
-            if not both_unmapped:
-                counts['written to %s' % bam_fh.name] += 1
-                samtools_p.stdin.write(line)
-            else:
-                if flag & 0x40:# 1st in pair
-                    counts['written to %s' % fastq_fh[0].name] += 1
-                    sam_to_fastq(line, fastq_fh[0])
-                elif flag & 0x80:# 2nd in pair
-                    counts['written to %s' % fastq_fh[1].name] += 1
-                    sam_to_fastq(line, fastq_fh[1])
-                else:
-                    raise ValueError()
+            # pairs required to be received sequentially
+            assert read_base_name(cur_read.rname) == \
+                read_base_name(prev_read.rname)
         else:
-            unmapped = flag & 0x4
-            if unmapped:
-                counts['written to %s' % fastq_fh[0].name] += 1
-                sam_to_fastq(line, fastq_fh[0])
+            assert not prev_read
+
+        cur_read_mapped = not (cur_read.flag & 0x4)
+        if cur_read_mapped and not min_cov_met(
+                cur_read.cigar, len(cur_read.seq), mincov):
+            cur_read_mapped = False
+
+        reads_to_print = [cur_read]
+        if cur_read_mapped:
+            to_bam = True
+        else:
+            to_bam = False
+
+
+        if is_paired:
+            reads_to_print.insert(0, prev_read)
+
+            prev_read_mapped = not (prev_read.flag & 0x4)
+            if prev_read_mapped and not min_cov_met(
+                    prev_read.cigar, len(prev_read.seq), mincov):
+                prev_read_mapped = False
+
+            # one in pair mapped? write both to BAM. oterhwise to fastq
+            if cur_read_mapped or prev_read_mapped:
+                to_bam = True
             else:
+                to_bam = False
+
+            # reset
+            prev_read = None
+
+
+        for r in reads_to_print:
+            if to_bam:
                 counts['written to %s' % bam_fh.name] += 1
-                samtools_p.stdin.write(line)
+                samtools_p.stdin.write(read_to_sam(r))
+            else:
+                if not is_paired or r.flag & 0x40:# 1st in pair
+                    counts['written to %s' % fastq_fh[0].name] += 1
+                    read_to_fastq(r, fastq_fh[0])
+                elif r.flag & 0x80:# 2nd in pair
+                    counts['written to %s' % fastq_fh[1].name] += 1
+                    read_to_fastq(r, fastq_fh[1])
+                else:
+                    raise ValueError(), ("Read with flag %d neither first nor last in pair" % r.flag)
+
 
     samtools_p.stdin.close()
     if samtools_p.wait() != 0:
         LOG.critical("Unhandled samtools error while processing %s" % (
             ' and '.join(fastq_in)))
-        LOG.critical("Note, this can happen if there was no contamination at all.")
+        LOG.critical("Note, this can happen if no read mapped at all.")
         LOG.critical("samtools might then produce the following complaint:"
                      " \"reference 'XYZ' is recognized as '*'\""
                      " followed by \"truncated file\"")
@@ -289,7 +438,12 @@ if __name__ == "__main__":
                         dest='ref',
                         help="Reference fasta file of source of contamination"
                         " (needs to be bwa indexed already)")
-    
+    mandatory.add_argument("-c", "--mincov",
+                        type=float,
+                        default=0.0,
+                        dest='mincov',
+                        help="Minimum alignment coverage to consider a"
+                        " read aligned (default: 0.0, i.e. off)")
     default = 8
     parser.add_argument("-t", "--threads",
                         dest='num_threads',
@@ -300,7 +454,8 @@ if __name__ == "__main__":
     parser.add_argument("-b", "--bwa",
                         dest='bwa',
                         default="bwa",
-                        help="Path to BWA binary (will use BWA found in PATH if not set)")
+                        help="Path to BWA binary (will use BWA found in"
+                        " PATH if not set)")
     args = parser.parse_args()
 
     fastq_out = ["%s_%d.fastq.gz" % (args.outpref, i+1)
@@ -332,9 +487,14 @@ if __name__ == "__main__":
         LOG.fatal("%s doesn't seem to support mem command.")
         sys.exit(1)
 
+    if args.mincov < 0.0 or args.mincov > 1.0:
+        LOG.fatal("minimum coverage arg must be between"
+                  " 0 and 1 (but is %f)" % args.mincov)
+        sys.exit(1)
 
     main(args.fastq_in, args.ref, fastq_fh, bam_fh,
-         num_threads=args.num_threads, bwa=args.bwa)
+         num_threads=args.num_threads, bwa=args.bwa,
+         mincov=args.mincov)
 
     for f in fastq_fh + [bam_fh]:
         f.close()

@@ -17,6 +17,13 @@ echo "INFO: testing $DECONT with $BWA"
 echo "INFO: log file is $LOG and output prefix is always $OUTPREF. If things go wrong, check those files"
 echo "INFO: last line should be 'All tests passed successfully'"
 
+
+if ! python -m doctest $DECONT; then
+	echo "FATAL: python doctest failed" 1>&2
+	exit 1
+fi
+
+
 # index if needed
 test -e ${REF}.bwt || bwa index $REF
 
@@ -83,10 +90,10 @@ if [ $n_fq -ne $n_in ] || [ $n_bam -ne 0 ]; then
     echo "ERROR: expected all reads in FastQ; none in BAM" 1>&2;
     exit 1;
 fi
-md5_in=$(zcat $in | $md5 | cut -f1 -d ' ' )
-md5_out=$(zcat ${OUTPREF}_*.fastq.gz | $md5 | cut -f1 -d ' ')
+md5_in=$(gzip -dc $in | $md5 | cut -f1 -d ' ' )
+md5_out=$(gzip -dc ${OUTPREF}_*.fastq.gz | $md5 | cut -f1 -d ' ')
 if [ $md5_in != $md5_out ]; then
-    echo "ERROR: reads in input and output FastQ differ" 1>&2;
+    echo "ERROR: reads in input ($in) and output FastQ $(ls ${OUTPREF}_*.fastq.gz) differ" 1>&2;
     exit 1;
 fi
 echo "$test: OK"
@@ -110,17 +117,55 @@ if [ $n_fq -ne $n_in ] || [ $n_bam -ne 0 ]; then
     echo "ERROR: expected all reads in FastQ; none in BAM" 1>&2;
     exit 1;
 fi
-md5_in=$(zcat $in | $md5 | cut -f1 -d ' ')
-md5_out=$(zcat ${OUTPREF}_*.fastq.gz | $md5 | cut -f1 -d ' ')
+md5_in=$(gzip -dc $in | $md5 | cut -f1 -d ' ')
+md5_out=$(gzip -dc ${OUTPREF}_*.fastq.gz | $md5 | cut -f1 -d ' ')
 if [ $md5_in != $md5_out ]; then
-    echo "ERROR: reads in input and output FastQ differ" 1>&2;
+    echo "ERROR: reads in input ($in) and output $(ls ${OUTPREF}_*.fastq.gz) FastQ differ" 1>&2;
     exit 1;
 fi
 echo "$test: OK"
 find . -name ${OUTPREF}\* -exec rm {} \;
 
 
-echo "NOTE: missing test for pairs where one maps the other one doesn't" 1>&2
+test="Match/Nonmatch pair"
+in="pe_match.fastq.gz pe_nomatch.fastq.gz"
+cmd="$DECONT -b $BWA -i $in -o ${OUTPREF} -r $REF"
+if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+n_in=$(fastq_num_reads.sh $in | awk '{s+=$NF} END {print s}')
+n_bam=$(samtools view -c ${OUTPREF}.bam)
+n_fq=$(fastq_num_reads.sh ${OUTPREF}_*.fastq.gz | awk '{s+=$NF} END {print s}')
+if [ $n_in -ne $n_bam ]; then
+    echo "ERROR: expected match/non-match pair to end up in BAM but didn't in $test"; 1>&2
+    exit 1;
+fi
+echo "$test: OK"
+find . -name ${OUTPREF}\* -exec rm {} \;
+
+
+test="Minimum coverage"
+in="pe_match_50cov.fastq.gz"
+cmd="$DECONT -b $BWA -c 0.51 -i $in -o ${OUTPREF} -r $REF"
+if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+n_in=$(fastq_num_reads.sh $in | awk '{s+=$NF} END {print s}')
+n_fq=$(fastq_num_reads.sh ${OUTPREF}_*.fastq.gz | awk '{s+=$NF} END {print s}')
+if [ $n_in -ne $n_fq ]; then
+    echo "ERROR: expected matches below coverage limit to count as unaligned"; 1>&2
+    exit 1;
+fi
+find . -name ${OUTPREF}\* -exec rm {} \;
+cmd="$DECONT -b $BWA -c 0.49 -i $in -o ${OUTPREF} -r $REF"
+if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+n_in=$(fastq_num_reads.sh $in | awk '{s+=$NF} END {print s}')
+n_bam=$(samtools view -c ${OUTPREF}.bam)
+if [ $n_in -ne $n_bam ]; then
+    echo "ERROR: expected matches above coverage limit to count as aligned"; 1>&2
+    echo "ERROR: cmd=$cmd"; 1>&2
+
+    exit 1;
+fi
+echo "$test: OK"
+
 
 echo "All tests passed successfully"
+#find . -name ${OUTPREF}\* -exec rm {} \;
 popd >/dev/null
