@@ -8,6 +8,7 @@ with uncontaminated reads.
 Needs samtools and BWA(-MEM) installed.
 """
 
+
 __author__ = "Andreas Wilm"
 __email__ = "wilma@gis.a-star.edu.sg"
 __copyright__ = "2014 Genome Institute of Singapore"
@@ -78,20 +79,20 @@ def read_base_name(r):
 
 def complement(strand):
     """return DNA complement
+    
     from http://stackoverflow.com/questions/1738633/more-pythonic-way-to-find-a-complementary-dna-strand
     """
-
     return strand.translate(maketrans('TAGCtagc', 'ATCGATCG'))
 
 
-def sam_to_fastq(sam_line, fastq_fh, check_uniq_occurance=10000):
-    """convert sam line to fastq entry.
+def sam_to_fastq(sam_line, fastq_fh, check_uniq_occurance=100):
+    """convert sam line to fastq entry
 
     Will make an attempt to check that no reads with identical names
     were processed (keeping check_uniq_occurance entries). The larger
     the number the more things will slow down. This makes it in fact
-    the most time consuming effect, which should be unnecessary as
-    long as we pass 0x900==0 reads in here.
+    the most time consuming step, even though it's in theory unnecessary
+    as long as we pass 0x900==0 reads in here.
     """
 
     # local static fake
@@ -124,6 +125,16 @@ def sam_to_fastq(sam_line, fastq_fh, check_uniq_occurance=10000):
     fastq_fh.write('@%s\n%s\n+\n%s\n' % (name, seq, qual))
 
 
+def bwa_mem_support(bwa='bwa'):
+    """checks whether bwa binary supports bwa mem"""
+
+    p = subprocess.Popen(bwa, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    for line in p.stderr:
+        if 'mem' in line.split():
+            return True
+    return False
+
+     
 def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa'):
     """main function
 
@@ -131,14 +142,12 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa'):
     """
 
     # FIXME bufsize needs testing & optimization
-    bufsize = 4096
+    bufsize = 2**16
 
     assert len(fastq_in) == len(fastq_fh)
     for f in fastq_in + [ref]:
         assert os.path.exists(f)
 
-    # FIXME check support for bwa mem
-    
     # can't use pysam with subprocess
     #p = subprocess.Popen(bwamem_cmd, stdout=subprocess.PIPE)
     #s = pysam.Samfile(p.stdout, "rb")
@@ -251,12 +260,12 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa'):
 
     samtools_p.stdin.close()
     if samtools_p.wait() != 0:
-        LOG.critical("Unhandled samtools error. Note, this can happen"
-                     " when BAM is empty i.e. with no contamination."
-                     " samtools might then issue the following complaint:"
+        LOG.critical("Unhandled samtools error while processing %s" % (
+            ' and '.join(fastq_in)))
+        LOG.critical("Note, this can happen if there was no contamination at all.")
+        LOG.critical("samtools might then produce the following complaint:"
                      " \"reference 'XYZ' is recognized as '*'\""
                      " followed by \"truncated file\"")
-
     for (k, v) in counts.items():
         LOG.info("Reads %s: %d" % (k, v))
 
@@ -281,15 +290,17 @@ if __name__ == "__main__":
                         help="Reference fasta file of source of contamination"
                         " (needs to be bwa indexed already)")
     
-    default = 4
+    default = 8
     parser.add_argument("-t", "--threads",
                         dest='num_threads',
                         default=default,
+                        type=int,
                         help="Number of threads to use for mapping"
                         " (default = %d)" % default)
     parser.add_argument("-b", "--bwa",
                         dest='bwa',
-                        help="Path to BWA supporting the mem command (will use BWA found in PATH if not set)")
+                        default="bwa",
+                        help="Path to BWA binary (will use BWA found in PATH if not set)")
     args = parser.parse_args()
 
     fastq_out = ["%s_%d.fastq.gz" % (args.outpref, i+1)
@@ -316,6 +327,11 @@ if __name__ == "__main__":
     if not os.path.exists(args.ref + ".bwt"):
         LOG.warn("Doesn't look like reference was indexed."
                  " Did you forget to run bwa index %s ?" % args.ref)
+
+    if not bwa_mem_support(args.bwa):
+        LOG.fatal("%s doesn't seem to support mem command.")
+        sys.exit(1)
+
 
     main(args.fastq_in, args.ref, fastq_fh, bam_fh,
          num_threads=args.num_threads, bwa=args.bwa)
