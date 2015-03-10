@@ -151,6 +151,11 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa'):
 
     # could redirect stderr to file and cat on problem but leave it to
     # user
+    #
+    # FIXME add '-M' Mark shorter split hits as secondary. Not for
+    # Picard but to make downstream filtering easier (just 0x200
+    # instead of 0x200 and 0x800)
+    # 
     cmd = [bwa, 'mem', '-t', "%d" % num_threads, ref]
     cmd.extend(fastq_in)
     bwa_p = subprocess.Popen(cmd,
