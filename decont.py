@@ -89,7 +89,7 @@ def sam_to_read(line, add_index=True):
     r = r._replace(pnext=int(r.pnext))
     r = r._replace(tlen=int(r.tlen))
 
-    if add_index and r.rname == read_base_name(r.rname):# swallowed by bwa
+    if add_index and r.qname == read_base_name(r.qname):# swallowed by bwa
         # From SAM spec: "If 0x1 is unset, no assumptions can be made
         # about 0x2, 0x8, 0x20, 0x40 and 0x80.". So check for pair before
         # checking read number.
@@ -147,7 +147,7 @@ def read_to_fastq(read, fastq_fh):
     fastq_fh.write('@%s\n%s\n+\n%s\n' % (read.qname, read.seq, read.qual))
 
 
-def read_base_name(rname):
+def read_base_name(qname):
     """return base name for read, i.e. without pairing information
 
     >>> r = "M01853:160:000000000-ADF3H:1:1101:15677:1332/1"
@@ -163,10 +163,10 @@ def read_base_name(rname):
     'M01853:160:000000000-ADF3H:1:1101:15677:1332'
     """
 
-    if rname[-1] in "0123456789" and rname[-2] in "#/":
-        return rname[:-2]
+    if qname[-1] in "0123456789" and qname[-2] in "#/":
+        return qname[:-2]
     else:
-        return rname
+        return qname
 
 
 def bwa_mem_support(bwa='bwa'):
@@ -357,8 +357,10 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
 
         if is_paired:
             # pairs required to be received sequentially
-            assert read_base_name(cur_read.rname) == \
-                read_base_name(prev_read.rname)
+            assert read_base_name(cur_read.qname) == \
+                read_base_name(prev_read.qname), (
+                    "Current read name is %s which doesn't match %s" % (
+                        cur_read.qname, prev_read.qname))
         else:
             assert not prev_read
 
