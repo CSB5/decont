@@ -18,6 +18,11 @@ echo "INFO: log file is $LOG and output prefix is always $OUTPREF. If things go 
 echo "INFO: last line should be 'All tests passed successfully'"
 
 
+if ! pylint -E $DECONT; then
+        echo "FATAL: pylint failed" 1>&2
+        exit 1
+fi
+
 if ! python -m doctest $DECONT; then
 	echo "FATAL: python doctest failed" 1>&2
 	exit 1
@@ -76,7 +81,9 @@ find . -name ${OUTPREF}\* -exec rm {} \;
 test="All clean (SR)"
 in="SRR1056478_denv1_nomatch_1.fastq.gz"
 cmd="$DECONT -b $BWA -i $in -o ${OUTPREF} -r $REF"
-if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+#if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+# "fail" ok, because non contaminated
+eval $cmd 2>$LOG
 n_in=$(fastq_num_reads.sh $in | awk '{s+=$NF} END {print s}')
 n_bam=$(samtools view -c ${OUTPREF}.bam)
 n_fq=$(fastq_num_reads.sh ${OUTPREF}_*.fastq.gz | awk '{s+=$NF} END {print s}')
@@ -103,7 +110,9 @@ find . -name ${OUTPREF}\* -exec rm {} \;
 test="All clean (PE)"
 in="SRR1056478_denv1_nomatch_1.fastq.gz SRR1056478_denv1_nomatch_2.fastq.gz"
 cmd="$DECONT -b $BWA -i $in -o ${OUTPREF} -r $REF"
-if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+#if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+# "fail" ok, because non contaminated
+eval $cmd 2>$LOG
 n_in=$(fastq_num_reads.sh $in | awk '{s+=$NF} END {print s}')
 n_bam=$(samtools view -c ${OUTPREF}.bam)
 n_fq=$(fastq_num_reads.sh ${OUTPREF}_*.fastq.gz | awk '{s+=$NF} END {print s}')
@@ -145,7 +154,9 @@ find . -name ${OUTPREF}\* -exec rm {} \;
 test="Minimum coverage"
 in="pe_match_50cov.fastq.gz"
 cmd="$DECONT -b $BWA -c 0.51 -i $in -o ${OUTPREF} -r $REF"
-if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+#if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+# "fail" ok, because non contaminated
+eval $cmd 2>$LOG
 n_in=$(fastq_num_reads.sh $in | awk '{s+=$NF} END {print s}')
 n_fq=$(fastq_num_reads.sh ${OUTPREF}_*.fastq.gz | awk '{s+=$NF} END {print s}')
 if [ $n_in -ne $n_fq ]; then
@@ -164,8 +175,38 @@ if [ $n_in -ne $n_bam ]; then
     exit 1;
 fi
 echo "$test: OK"
+find . -name ${OUTPREF}\* -exec rm {} \;
+
+
+test="Catch errors"
+in="invalid.fastq"
+cmd="$DECONT -i $in -r $REF -o ${OUTPREF}"
+if eval $cmd 2>$LOG; then echo "ERROR: the following command should have failed, but didn't: $cmd" 1>&2; exit 1; fi
+echo "$test: OK"
+find . -name ${OUTPREF}\* -exec rm {} \;
+
+
+test="Pair-suffix present in FastQ, but not in BAM"
+in="SRR1056478_denv1_match_1.fastq.gz SRR1056478_denv1_match_2.fastq.gz"
+cmd="$DECONT -i $in -r $REF -o ${OUTPREF}"
+if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+name=$(samtools view ${OUTPREF}.bam | head -n 1 | cut -f 1) || exit 1
+if echo $name | grep -q '[#/][12]$'; then
+    echo "ERROR: pair-suffices should be missing in BAM but aren't"; 1>&2
+fi
+find . -name ${OUTPREF}\* -exec rm {} \;
+in="SRR1056478_denv1_nomatch_1.fastq.gz SRR1056478_denv1_nomatch_2.fastq.gz"
+cmd="$DECONT -i $in -r $REF -o ${OUTPREF}"
+#if ! eval $cmd 2>$LOG; then echo "ERROR: the following command failed: $cmd" 1>&2; exit 1; fi
+# "fail" ok, because non contaminated
+eval $cmd 2>$LOG
+name=$(gzip -dc $in | head -n 1)
+if ! echo $name | grep -q '[#/][12]$'; then
+    echo "ERROR: pair-suffices should be present in FastQ but aren't"; 1>&2
+fi
+find . -name ${OUTPREF}\* -exec rm {} \;
 
 
 echo "All tests passed successfully"
-#find . -name ${OUTPREF}\* -exec rm {} \;
+find . -name ${OUTPREF}\* -exec rm {} \;
 popd >/dev/null
