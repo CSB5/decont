@@ -28,7 +28,7 @@ from string import maketrans
 import gzip
 from itertools import groupby
 from collections import namedtuple
-
+import tempfile
 
 SamRead = namedtuple('SamRead',
                      ['qname', 'flag', 'rname', 'pos', 'mapq', 'cigar',
@@ -75,7 +75,23 @@ from samtools' 0.1.19 bam.h:
 """
 
 
-def sam_to_read(line, add_index=True):
+
+def read_add_index(r):
+    """index is part of filename in fastq but not in BAM"""
+    
+    if r.qname == read_base_name(r.qname):
+        # From SAM spec: "If 0x1 is unset, no assumptions can be made
+        # about 0x2, 0x8, 0x20, 0x40 and 0x80.". So check for pair before
+        # checking read number.
+        index = 1
+        if (r.flag & 0x1) and (r.flag & 0x80):
+            index += 1
+        r = r._replace(qname="%s/%d" % (r.qname, index))
+            
+    return r
+
+   
+def sam_to_read(line):
     """converts same line to namedtuple read
     """
 
@@ -89,20 +105,12 @@ def sam_to_read(line, add_index=True):
     r = r._replace(pnext=int(r.pnext))
     r = r._replace(tlen=int(r.tlen))
 
-    if add_index and r.qname == read_base_name(r.qname):# swallowed by bwa
-        # From SAM spec: "If 0x1 is unset, no assumptions can be made
-        # about 0x2, 0x8, 0x20, 0x40 and 0x80.". So check for pair before
-        # checking read number.
-        index = 1
-        if (r.flag & 0x1) and (r.flag & 0x80):
-            index += 1
-        r = r._replace(qname="%s/%d" % (r.qname, index))
-
     return r
 
 
 def read_to_sam(read):
     """convert namedtuple read to sam line"""
+
     values = read._asdict().values()
     sam = '\t'.join([str(v) for v in values[:11]])
     if read.rest:
@@ -135,6 +143,9 @@ def read_to_fastq(read, fastq_fh):
     # http://stackoverflow.com/questions/279561/what-is-the-python-equivalent-of-static-variables-inside-a-function
     #if 'seen' not in sam_to_fastq.__dict__:
     #    sam_to_fastq.seen = deque(maxlen=check_uniq_occurance)
+
+    # not part of SAM but part of fastq
+    read = read_add_index(read)
 
     if read.flag & 0x10:
         read = read._replace(seq=reversed(complement(read.seq)))
@@ -253,7 +264,7 @@ def min_cov_met(cstr, rlen, mincov):
     """
 
     if mincov:
-        assert mincov>=0.0 and mincov<=1.0
+        assert mincov >= 0.0 and mincov <= 1.0
     if not mincov or mincov <= 0.0:
         return True
     if read_coverage(cstr, rlen) < mincov:
@@ -274,6 +285,14 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
     for f in fastq_in + [ref]:
         assert os.path.exists(f)
 
+    bwa_log = tempfile.NamedTemporaryFile(
+        mode='w', prefix=os.path.basename(sys.argv[0]) + ".bwa.",  delete=False)
+    samtools_log = tempfile.NamedTemporaryFile(
+        mode='w', prefix=os.path.basename(sys.argv[0]) + ".samtools.", delete=False)
+
+    LOG.info("Using %s as log file for samtools" % bwa_log.name)
+    LOG.info("Using %s as log file for bwa" % samtools_log.name)
+
     # open BAM as pipe
     # can't use pysam with subprocess
     # p = subprocess.Popen(bwamem_cmd, stdout=subprocess.PIPE)
@@ -283,7 +302,8 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
     # could use stringio?
     cmd = ["samtools", "view", "-bS", "-"]
     samtools_p = subprocess.Popen(cmd,
-        stdin=subprocess.PIPE, stdout=bam_fh, bufsize=bufsize)
+        stdin=subprocess.PIPE, stdout=bam_fh, 
+        stderr=samtools_log, bufsize=bufsize)
 
     # open BWA as pipe
     #
@@ -297,7 +317,7 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
     cmd = [bwa, 'mem', '-t', "%d" % num_threads, ref]
     cmd.extend(fastq_in)
     bwa_p = subprocess.Popen(cmd,
-        stdout=subprocess.PIPE, bufsize=bufsize)
+        stdout=subprocess.PIPE, stderr=bwa_log, bufsize=bufsize)
 
     prev_read = None
     counts = defaultdict(int)# for reporting
@@ -408,17 +428,26 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
                 else:
                     raise ValueError(), ("Read with flag %d neither first nor last in pair" % r.flag)
 
-
-    samtools_p.stdin.close()
-    if samtools_p.wait() != 0:
-        LOG.critical("Unhandled samtools error while processing %s" % (
-            ' and '.join(fastq_in)))
-        LOG.critical("Note, this can happen if no read mapped at all.")
-        LOG.critical("samtools might then produce the following complaint:"
-                     " \"reference 'XYZ' is recognized as '*'\""
-                     " followed by \"truncated file\"")
     for (k, v) in counts.items():
         LOG.info("Reads %s: %d" % (k, v))
+
+    bwa_p.stdout.close()
+    if bwa_p.wait() != 0 or bwa_p.returncode != 0:
+        LOG.critical("Unhandled BWA error while processing %s. Check %s" % (
+            ' and '.join(fastq_in), bwa_log.name))
+        return False
+    
+    samtools_p.stdin.close()
+    if samtools_p.wait() != 0 or samtools_p.returncode != 0:
+        LOG.critical("Unhandled samtools error while processing %s. Check %s" % (
+            ' and '.join(fastq_in), samtools_log.name))
+        LOG.critical("Note, this can happen if no reads whatsoever were contaminated.")
+        #LOG.critical("samtools might then produce the following complaint:"
+        #             " \"reference 'XYZ' is recognized as '*'\""
+        #             " followed by \"truncated file\"")
+        return False
+
+    return True
 
 
 if __name__ == "__main__":
@@ -494,11 +523,14 @@ if __name__ == "__main__":
                   " 0 and 1 (but is %f)" % args.mincov)
         sys.exit(1)
 
-    main(args.fastq_in, args.ref, fastq_fh, bam_fh,
-         num_threads=args.num_threads, bwa=args.bwa,
-         mincov=args.mincov)
+    rc = main(args.fastq_in, args.ref, fastq_fh, bam_fh,
+              num_threads=args.num_threads, bwa=args.bwa,
+              mincov=args.mincov)
 
     for f in fastq_fh + [bam_fh]:
         f.close()
 
+    if not rc:
+        sys.exit(1)
+        
     LOG.info("Successful program exit")
