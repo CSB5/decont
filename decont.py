@@ -9,11 +9,6 @@ Needs samtools and BWA(-MEM) installed.
 """
 
 
-__author__ = "Andreas Wilm"
-__email__ = "wilma@gis.a-star.edu.sg"
-__copyright__ = "2014 Genome Institute of Singapore"
-__license__ = "WTFPL http://www.wtfpl.net/"
-
 
 #--- standard library imports
 #
@@ -29,6 +24,14 @@ import gzip
 from itertools import groupby
 from collections import namedtuple
 import tempfile
+
+
+__author__ = "Andreas Wilm"
+__email__ = "wilma@gis.a-star.edu.sg"
+__copyright__ = "2014-2016 Genome Institute of Singapore"
+__license__ = "WTFPL http://www.wtfpl.net/"
+
+
 
 SamRead = namedtuple('SamRead',
                      ['qname', 'flag', 'rname', 'pos', 'mapq', 'cigar',
@@ -78,7 +81,7 @@ from samtools' 0.1.19 bam.h:
 
 def read_add_index(r):
     """index is part of filename in fastq but not in BAM"""
-    
+
     if r.qname == read_base_name(r.qname):
         # From SAM spec: "If 0x1 is unset, no assumptions can be made
         # about 0x2, 0x8, 0x20, 0x40 and 0x80.". So check for pair before
@@ -87,10 +90,10 @@ def read_add_index(r):
         if (r.flag & 0x1) and (r.flag & 0x80):
             index += 1
         r = r._replace(qname="%s/%d" % (r.qname, index))
-            
+
     return r
 
-   
+
 def sam_to_read(line):
     """converts same line to namedtuple read
     """
@@ -148,8 +151,8 @@ def read_to_fastq(read, fastq_fh):
     read = read_add_index(read)
 
     if read.flag & 0x10:
-        read = read._replace(seq=reversed(complement(read.seq)))
-        read = read._replace(qual=reversed(read.qual))
+        read = read._replace(seq=complement(read.seq)[::-1])
+        read = read._replace(qual=read.qual[::-1])
 
     #if check_uniq_occurance:
     #    assert name not in sam_to_fastq.seen
@@ -234,7 +237,7 @@ def read_coverage(cigar_str, read_len):
     """
 
     cigar = list(cigar_items(cigar_str))
-    if len(cigar) == 1 and cigar[0][1] == None:
+    if len(cigar) == 1 and cigar[0][1] is None:
         return 0.0
 
     covered = read_len
@@ -286,12 +289,12 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
         assert os.path.exists(f)
 
     bwa_log = tempfile.NamedTemporaryFile(
-        mode='w', prefix=os.path.basename(sys.argv[0]) + ".bwa.",  delete=False)
+        mode='w', prefix=os.path.basename(sys.argv[0]) + ".bwa.", delete=False)
     samtools_log = tempfile.NamedTemporaryFile(
         mode='w', prefix=os.path.basename(sys.argv[0]) + ".samtools.", delete=False)
 
-    LOG.info("Using %s as log file for samtools" % bwa_log.name)
-    LOG.info("Using %s as log file for bwa" % samtools_log.name)
+    LOG.info("Using %s as log file for samtools", bwa_log.name)
+    LOG.info("Using %s as log file for bwa", samtools_log.name)
 
     # open BAM as pipe
     # can't use pysam with subprocess
@@ -301,9 +304,9 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
     # see also https://www.biostars.org/p/15298/#105456
     # could use stringio?
     cmd = ["samtools", "view", "-bS", "-"]
-    samtools_p = subprocess.Popen(cmd,
-        stdin=subprocess.PIPE, stdout=bam_fh, 
-        stderr=samtools_log, bufsize=bufsize)
+    samtools_p = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                  stdout=bam_fh, stderr=samtools_log,
+                                  bufsize=bufsize)
 
     # open BWA as pipe
     #
@@ -316,8 +319,8 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
     #
     cmd = [bwa, 'mem', '-t', "%d" % num_threads, ref]
     cmd.extend(fastq_in)
-    bwa_p = subprocess.Popen(cmd,
-        stdout=subprocess.PIPE, stderr=bwa_log, bufsize=bufsize)
+    bwa_p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                             stderr=bwa_log, bufsize=bufsize)
 
     prev_read = None
     counts = defaultdict(int)# for reporting
@@ -429,18 +432,18 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
                     raise ValueError(), ("Read with flag %d neither first nor last in pair" % r.flag)
 
     for (k, v) in counts.items():
-        LOG.info("Reads %s: %d" % (k, v))
+        LOG.info("Reads %s: %d", k, v)
 
     bwa_p.stdout.close()
     if bwa_p.wait() != 0 or bwa_p.returncode != 0:
-        LOG.critical("Unhandled BWA error while processing %s. Check %s" % (
-            ' and '.join(fastq_in), bwa_log.name))
+        LOG.critical("Unhandled BWA error while processing %s. Check %s",
+                     ' and '.join(fastq_in), bwa_log.name)
         return False
-    
+
     samtools_p.stdin.close()
     if samtools_p.wait() != 0 or samtools_p.returncode != 0:
-        LOG.critical("Unhandled samtools error while processing %s. Check %s" % (
-            ' and '.join(fastq_in), samtools_log.name))
+        LOG.critical("Unhandled samtools error while processing %s. Check %s",
+                     ' and '.join(fastq_in), samtools_log.name)
         LOG.critical("Note, this can happen if no reads whatsoever were contaminated.")
         #LOG.critical("samtools might then produce the following complaint:"
         #             " \"reference 'XYZ' is recognized as '*'\""
@@ -456,25 +459,25 @@ if __name__ == "__main__":
     # FIXME allow reuse of existing bam (needs to be sorted by name!)
     mandatory = parser.add_argument_group('mandatory arguments')
     mandatory.add_argument("-i", "--fq",
-                        dest='fastq_in',
-                        required=True,
-                        nargs="*",
-                        help="FastQ input file/s")
+                           dest='fastq_in',
+                           required=True,
+                           nargs="*",
+                           help="FastQ input file/s")
     mandatory.add_argument("-o", "--outpref",
-                        dest='outpref',
-                        required=True,
-                        help="Filename prefix for output files")
+                           dest='outpref',
+                           required=True,
+                           help="Filename prefix for output files")
     mandatory.add_argument("-r", "--ref",
-                        required=True,
-                        dest='ref',
-                        help="Reference fasta file of source of contamination"
-                        " (needs to be bwa indexed already)")
+                           required=True,
+                           dest='ref',
+                           help="Reference fasta file of source of contamination"
+                           " (needs to be bwa indexed already)")
     mandatory.add_argument("-c", "--mincov",
-                        type=float,
-                        default=0.0,
-                        dest='mincov',
-                        help="Minimum alignment coverage to consider a"
-                        " read aligned (default: 0.0, i.e. off)")
+                           type=float,
+                           default=0.0,
+                           dest='mincov',
+                           help="Minimum alignment coverage to consider a"
+                           " read aligned (default: 0.0, i.e. off)")
     default = 8
     parser.add_argument("-t", "--threads",
                         dest='num_threads',
@@ -496,14 +499,14 @@ if __name__ == "__main__":
     infiles = args.fastq_in + [args.ref]
     for f in infiles:
         if not os.path.exists(f):
-            LOG.fatal("Input file %s does not exist" % f)
+            LOG.fatal("Input file %s does not exist", f)
             sys.exit(1)
 
     outfiles = fastq_out + [bam_out]
     for f in outfiles:
         if os.path.exists(f):
             LOG.fatal("Cowardly refusing to overwrite"
-                      " already existing file %s" % f)
+                      " already existing file %s", f)
             sys.exit(1)
 
     fastq_fh = [gzip.open(f, 'w') for f in fastq_out]
@@ -512,7 +515,7 @@ if __name__ == "__main__":
 
     if not os.path.exists(args.ref + ".bwt"):
         LOG.warn("Doesn't look like reference was indexed."
-                 " Did you forget to run bwa index %s ?" % args.ref)
+                 " Did you forget to run bwa index %s ?", args.ref)
 
     if not bwa_mem_support(args.bwa):
         LOG.fatal("%s doesn't seem to support mem command.")
@@ -520,7 +523,7 @@ if __name__ == "__main__":
 
     if args.mincov < 0.0 or args.mincov > 1.0:
         LOG.fatal("minimum coverage arg must be between"
-                  " 0 and 1 (but is %f)" % args.mincov)
+                  " 0 and 1 (but is %f)", args.mincov)
         sys.exit(1)
 
     rc = main(args.fastq_in, args.ref, fastq_fh, bam_fh,
@@ -532,5 +535,5 @@ if __name__ == "__main__":
 
     if not rc:
         sys.exit(1)
-        
+
     LOG.info("Successful program exit")

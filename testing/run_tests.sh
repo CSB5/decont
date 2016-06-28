@@ -17,8 +17,8 @@ echo "INFO: testing $DECONT with $BWA"
 echo "INFO: log file is $LOG and output prefix is always $OUTPREF. If things go wrong, check those files"
 echo "INFO: last line should be 'All tests passed successfully'"
 
-
-if ! pylint -E $DECONT; then
+#  -d no-member for namedtuple FP errors (order matters!)
+if ! pylint  -E $DECONT -d no-member; then
         echo "FATAL: pylint failed" 1>&2
         exit 1
 fi
