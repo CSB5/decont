@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Performs a mapping of given SR/PE reads (gzip supported) with
 BWA-MEM against given source of contamination and produces an
 (unsorted) BAM file with contaminated reads (one mate mapping suffices
@@ -17,14 +17,13 @@ import logging
 import os
 import argparse
 import subprocess
-#from collections import deque
-from collections import defaultdict
-from string import maketrans
 import gzip
 from itertools import groupby
+#from collections import deque
+from collections import defaultdict
 from collections import namedtuple
 import tempfile
-
+import shutil
 
 __author__ = "Andreas Wilm"
 __email__ = "wilma@gis.a-star.edu.sg"
@@ -114,7 +113,7 @@ def sam_to_read(line):
 def read_to_sam(read):
     """convert namedtuple read to sam line"""
 
-    values = read._asdict().values()
+    values = list(read._asdict().values())
     sam = '\t'.join([str(v) for v in values[:11]])
     if read.rest:
         sam = "%s\t%s" % (sam, read.rest)
@@ -129,7 +128,7 @@ def complement(strand):
     >>> complement('AcGtN')
     'TGCAN'
     """
-    return strand.translate(maketrans('TAGCtagc', 'ATCGATCG'))
+    return strand.translate(str.maketrans('TAGCtagc', 'ATCGATCG'))
 
 
 def read_to_fastq(read, fastq_fh):
@@ -157,7 +156,6 @@ def read_to_fastq(read, fastq_fh):
     #if check_uniq_occurance:
     #    assert name not in sam_to_fastq.seen
     #    sam_to_fastq.seen.append(name)
-
     fastq_fh.write('@%s\n%s\n+\n%s\n' % (read.qname, read.seq, read.qual))
 
 
@@ -188,7 +186,7 @@ def bwa_mem_support(bwa='bwa'):
 
     p = subprocess.Popen(bwa, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     for line in p.stderr:
-        if 'mem' in line.split():
+        if 'mem' in line.decode().split():
             return True
     return False
 
@@ -329,14 +327,13 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
         #if line_no>1000:
         #    LOG.critical("DEBUG break")
         #    break
-
         # catch SAM header
-        if line.startswith('@'):
+        if line.decode().startswith('@'):
             samtools_p.stdin.write(line)
             continue
 
         counts['Total received from BWA'] += 1
-        cur_read = sam_to_read(line)
+        cur_read = sam_to_read(line.decode())
 
         # from the SAM spec http://samtools.github.io/hts-specs/SAMv1.pdf:
         #
@@ -393,10 +390,7 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
             cur_read_mapped = False
 
         reads_to_print = [cur_read]
-        if cur_read_mapped:
-            to_bam = True
-        else:
-            to_bam = False
+        to_bam = cur_read_mapped
 
 
         if is_paired:
@@ -408,10 +402,7 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
                 prev_read_mapped = False
 
             # one in pair mapped? write both to BAM. oterhwise to fastq
-            if cur_read_mapped or prev_read_mapped:
-                to_bam = True
-            else:
-                to_bam = False
+            to_bam = cur_read_mapped or prev_read_mapped
 
             # reset
             prev_read = None
@@ -420,7 +411,7 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
         for r in reads_to_print:
             if to_bam:
                 counts['written to %s' % bam_fh.name] += 1
-                samtools_p.stdin.write(read_to_sam(r))
+                samtools_p.stdin.write(read_to_sam(r).encode())
             else:
                 if not is_paired or r.flag & 0x40:# 1st in pair
                     counts['written to %s' % fastq_fh[0].name] += 1
@@ -429,7 +420,8 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
                     counts['written to %s' % fastq_fh[1].name] += 1
                     read_to_fastq(r, fastq_fh[1])
                 else:
-                    raise ValueError(), ("Read with flag %d neither first nor last in pair" % r.flag)
+                    LOG.critical("Read with flag %d neither first nor last in pair", r.flag)
+                    raise ValueError(r.flag)
 
     for (k, v) in counts.items():
         LOG.info("Reads %s: %d", k, v)
@@ -454,6 +446,8 @@ def main(fastq_in, ref, fastq_fh, bam_fh, num_threads=2, bwa='bwa', mincov=0.0):
 
 
 if __name__ == "__main__":
+    assert shutil.which('bwa') and shutil.which('samtools')
+
     parser = argparse.ArgumentParser()
     # FIXME support bwa-mem special args
     # FIXME allow reuse of existing bam (needs to be sorted by name!)
@@ -509,16 +503,16 @@ if __name__ == "__main__":
                       " already existing file %s", f)
             sys.exit(1)
 
-    fastq_fh = [gzip.open(f, 'w') for f in fastq_out]
+    fastq_fh = [gzip.open(f, 'wt') for f in fastq_out]
 
     bam_fh = open(bam_out, 'wb')
 
     if not os.path.exists(args.ref + ".bwt"):
-        LOG.warn("Doesn't look like reference was indexed."
-                 " Did you forget to run bwa index %s ?", args.ref)
+        LOG.warning("Doesn't look like reference was indexed."
+                    " Did you forget to run bwa index %s ?", args.ref)
 
     if not bwa_mem_support(args.bwa):
-        LOG.fatal("%s doesn't seem to support mem command.")
+        LOG.fatal("%s doesn't seem to support mem command.", args.bwa)
         sys.exit(1)
 
     if args.mincov < 0.0 or args.mincov > 1.0:
