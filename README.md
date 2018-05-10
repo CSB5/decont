@@ -13,3 +13,26 @@ uncontaminated reads.
 
 Needs samtools and BWA(-MEM) installed.
 
+If minimum coverage is not met, the read is treated as unaligned.
+
+# TODO
+
+
+## Add testing data
+
+- SE aligned
+- SE unaligned
+- SE secondary
+- SE aligned below mincov
+- PE both aligned
+- PE both unaligned
+- PE one aligned
+- PE both aligned secondary
+
+
+
+## Remove most python bits for speedup
+
+- Run `samtools fixmate` (paranoia) followed by
+- `samtools fastq -F`, removing any unmapped read or read with unmapped
+pair (option) and secondary alignments
