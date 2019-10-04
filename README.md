@@ -1,6 +1,9 @@
 decont
 ======
 
+
+# NOTE: this repo is outdated. Please use the fully reimplemented and faster version called [decontanimate](https://bitbucket.org/andreas-wilm/decontanimate/src/master/)
+
 Decontaminate FastQ files by mapping with BWA-MEM against a given
 source.
 
